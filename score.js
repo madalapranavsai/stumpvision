@@ -45,6 +45,7 @@ function startMatch() {
     }
     
     localStorage.removeItem('matchData');
+    localStorage.removeItem('savedMatchData'); // Also clear manually saved match
     localStorage.setItem('matchDetails', JSON.stringify(details));
     window.location.href = 'live.html';
 }
@@ -53,6 +54,7 @@ function startMatch() {
 // LIVE MATCH INITIALIZATION
 // ===================================================================================
 async function initMatch() {
+    // Priority 1: Check for data from the current session (for reloads)
     const storedMatchData = localStorage.getItem('matchData');
     if (storedMatchData) {
         match = JSON.parse(storedMatchData);
@@ -60,6 +62,15 @@ async function initMatch() {
         return;
     }
 
+    // Priority 2: Check for a manually saved match (if no session data)
+    const savedMatchData = localStorage.getItem('savedMatchData');
+    if (savedMatchData) {
+        match = JSON.parse(savedMatchData);
+        updateDisplay();
+        return;
+    }
+
+    // Priority 3: Start a new match from setup details
     const stored = JSON.parse(localStorage.getItem('matchDetails'));
     if (!stored) {
         alert('Match details missing! Redirecting to setup...');
@@ -151,6 +162,7 @@ async function addWicket() {
     const outBatterName = match.current.striker.name;
 
     match.current.score.wickets++;
+    // A run-out does not count towards a bowler's wickets
     if (!dismissalType.toLowerCase().includes('run out')) {
         match.current.currentBowler.wickets++;
     }
@@ -163,10 +175,10 @@ async function addWicket() {
     
     match.current.thisOver.push('W');
     addCommentary(`WICKET! ${outBatterName} is out (${dismissalType})!`);
-    updateBall();
-
+    
     if (match.current.score.wickets >= 10) {
         addCommentary(`All out! End of innings.`);
+        updateBall(); // Process the ball before ending the innings
         endInnings();
         return;
     }
@@ -178,8 +190,10 @@ async function addWicket() {
         match.allBatters.push(newBatter);
     }
     
+    updateBall(); // Process ball after new batter is in
     updateDisplay();
 }
+
 
 function addExtra(type) {
     saveState();
@@ -194,9 +208,10 @@ function addExtra(type) {
     addCommentary(messages[type]);
     
     if (type === 'wide' || type === 'no-ball') {
-        isExtraBall = true;
+        isExtraBall = true; // This is an extra ball, so don't increment ball count
         updateDisplay();
     } else {
+        // Byes and leg-byes are legal deliveries
         updateBall();
     }
 }
@@ -206,27 +221,42 @@ async function updateBall() {
         match.current.balls++;
         match.current.currentBowler.balls++;
     }
-    isExtraBall = false;
+    isExtraBall = false; // Reset for the next ball
     
     if (match.current.balls >= 6) {
+        // End of over logic
         match.current.overs++;
         match.current.balls = 0;
         match.current.currentBowler.overs++;
+        
+        // Check for maiden over (only if it was a legal over)
+        if (match.current.thisOver.every(ball => typeof ball === 'number' && ball === 0)) {
+            match.current.currentBowler.maidens++;
+        }
+        
         match.current.thisOver = [];
         
         swapStrike();
         updatePlayerInList(match.allBowlers, match.current.currentBowler);
         
+        // Check if innings should end due to overs
+        if (match.current.overs >= match.maxOvers) {
+            endInnings();
+            return;
+        }
+
         const newBowlerName = await getPlayerFromModal("Enter new bowler's name:");
         match.current.currentBowler = findOrCreatePlayer(match.allBowlers, newBowlerName, createBowler);
     }
     
+    // Check for innings end conditions again
     if (match.current.overs >= match.maxOvers || match.current.score.wickets >= 10) {
         endInnings();
     } else {
         updateDisplay();
     }
 }
+
 
 async function endInnings() {
     updatePlayerInList(match.allBatters, match.current.striker);
@@ -240,10 +270,13 @@ async function endInnings() {
         
         [match.current.battingTeam, match.current.bowlingTeam] = [match.current.bowlingTeam, match.current.battingTeam];
         
+        // Reset for the second innings
         match.current.score = { runs: 0, wickets: 0, extras: 0 };
         match.current.overs = 0;
         match.current.balls = 0;
         match.current.thisOver = [];
+        match.commentary = []; // Clear commentary for the new innings
+        document.getElementById('commentary').innerHTML = ''; // Clear display
         
         const strikerName = await getPlayerFromModal("Enter new striker:");
         const nonStrikerName = await getPlayerFromModal("Enter new non-striker:");
@@ -256,10 +289,12 @@ async function endInnings() {
         
         updateDisplay();
     } else {
+        // End of match
         localStorage.setItem('matchData', JSON.stringify(match));
         window.location.href = 'summary.html';
     }
 }
+
 
 // ===================================================================================
 // UI & DISPLAY
@@ -294,16 +329,21 @@ function updateDisplay() {
     const thisOverHtml = match.current.thisOver.map(ball => `<span class="ball-event">${ball}</span>`).join(' ');
     document.getElementById('thisOverBalls').innerHTML = thisOverHtml;
 
+    // Automatically save the current state for session persistence (reloads)
     localStorage.setItem('matchData', JSON.stringify(match));
 }
 
 function addCommentary(text) {
     const over = `${match.current.overs}.${match.current.balls}`;
+    const entryText = `${over} - ${text}`;
+    match.commentary.unshift(entryText); // Add to the start of the array
+
     const entry = document.createElement('div');
     entry.className = 'commentary-entry';
-    entry.textContent = `${over} - ${text}`;
+    entry.textContent = entryText;
     document.getElementById('commentary').prepend(entry);
 }
+
 
 function getPlayerFromModal(title) {
     return new Promise(resolve => {
@@ -322,19 +362,26 @@ function getPlayerFromModal(title) {
 }
 
 // ===================================================================================
-// NAVIGATION & STATE HISTORY (UNDO)
+// NAVIGATION & STATE HISTORY
 // ===================================================================================
 function saveState() {
     matchHistory.push(JSON.parse(JSON.stringify(match)));
-    if (matchHistory.length > 20) matchHistory.shift();
+    if (matchHistory.length > 20) matchHistory.shift(); // Keep history manageable
 }
 
 function undoLastAction() {
     if (matchHistory.length > 0) {
         match = matchHistory.pop();
         updateDisplay();
+        // Restore commentary from the match state
         const commentaryBox = document.getElementById('commentary');
-        if (commentaryBox.firstChild) commentaryBox.removeChild(commentaryBox.firstChild);
+        commentaryBox.innerHTML = '';
+        match.commentary.forEach(text => {
+            const entry = document.createElement('div');
+            entry.className = 'commentary-entry';
+            entry.textContent = text;
+            commentaryBox.appendChild(entry);
+        });
     } else {
         alert("No more actions to undo!");
     }
@@ -348,8 +395,31 @@ function goToScorecard() {
 function resetMatch() {
     localStorage.removeItem('matchData');
     localStorage.removeItem('matchDetails');
+    localStorage.removeItem('savedMatchData');
     window.location.href = 'setup.html';
 }
+
+// ===================================================================================
+// SAVE & LOAD MATCH FUNCTIONS
+// ===================================================================================
+function saveMatch() {
+    localStorage.setItem('savedMatchData', JSON.stringify(match));
+    alert('Match saved successfully!');
+}
+
+function loadMatch() {
+    const savedMatch = localStorage.getItem('savedMatchData');
+    if (savedMatch) {
+        match = JSON.parse(savedMatch);
+        // Also update the current session data to match the loaded state
+        localStorage.setItem('matchData', savedMatch);
+        updateDisplay();
+        alert('Match loaded successfully!');
+    } else {
+        alert('No saved match found!');
+    }
+}
+
 
 window.onload = function() {
     if(window.location.pathname.includes('live.html')) {
