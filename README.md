@@ -79,18 +79,7 @@ A simple yet powerful **Cricket Scorekeeping Web App** that lets you manage live
 - Responsive mobile-first design enhancements
 - Better UI for fielder/bowler selection (dropdown instead of prompt)
 
----
 
-## 📸 Preview
-
-### Setup Page
-![Setup Page](docs/setup.png)
-
-### Live Scoring
-![Live Match](docs/live.png)
-
-### Scorecard
-![Scorecard](docs/scorecard.png)
 
 ---
 
